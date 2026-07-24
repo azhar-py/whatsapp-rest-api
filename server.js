@@ -20,8 +20,22 @@ if (!API_TOKEN || API_TOKEN === 'change_me_to_a_long_random_secret') {
 const app = express();
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
-app.use(express.json({ limit: '25mb' }));
+// Accept raw JSON bodies (primary). Also parse text/plain as JSON for clients
+// that send raw body without application/json Content-Type.
+app.use(express.json({
+    limit: '25mb',
+    type: ['application/json', 'text/json', 'text/plain'],
+}));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+/** Use multer only for multipart; leave req.body alone for raw JSON */
+function optionalFileUpload(req, res, next) {
+    const ct = String(req.headers['content-type'] || '');
+    if (ct.includes('multipart/form-data')) {
+        return upload.single('file')(req, res, next);
+    }
+    return next();
+}
 
 /** Extract token from Authorization Bearer, x-api-token, or ?token= */
 function extractToken(req) {
@@ -226,10 +240,10 @@ function cleanupUpload(file) {
 // GET  /status           -> connection status
 // GET  /qr               -> QR as JSON (base64) when not connected
 // GET  /qr/image         -> QR as PNG image
-// POST /send/text        -> send text
-// POST /send/image       -> send image (file upload or base64)
-// POST /send/voice       -> send voice note (file upload or base64)
-// POST /send/media       -> send any media
+// POST /send/text        -> send text (raw JSON)
+// POST /send/image       -> send image (raw JSON base64; multipart optional)
+// POST /send/voice       -> send voice note (raw JSON base64; multipart optional)
+// POST /send/media       -> send any media (raw JSON base64; multipart optional)
 // GET  /messages         -> received messages inbox
 // GET  /messages/:id     -> one message (includes media base64 if any)
 // GET  /chats            -> list chats
@@ -241,14 +255,15 @@ app.get('/', (req, res) => {
     res.json({
         name: 'WhatsApp REST API',
         auth: 'Required on every request: Authorization: Bearer <API_TOKEN> or x-api-token header',
+        body: 'POST endpoints accept raw JSON (Content-Type: application/json). Media fields use base64.',
         endpoints: {
             status: 'GET /status',
             qr: 'GET /qr',
             qrImage: 'GET /qr/image',
-            sendText: 'POST /send/text  { number, message }',
-            sendImage: 'POST /send/image  multipart: number, caption?, file  OR json: number, caption?, base64, mimetype, filename?',
-            sendVoice: 'POST /send/voice  multipart: number, file  OR json: number, base64, mimetype?',
-            sendMedia: 'POST /send/media  multipart: number, caption?, file  OR json: number, caption?, base64, mimetype, filename?, asVoice?',
+            sendText: 'POST /send/text  JSON: { number, message }',
+            sendImage: 'POST /send/image  JSON: { number, caption?, base64, mimetype, filename? }',
+            sendVoice: 'POST /send/voice  JSON: { number, base64, mimetype?, filename? }',
+            sendMedia: 'POST /send/media  JSON: { number, caption?, base64, mimetype, filename?, asVoice? }',
             messages: 'GET /messages?limit=50&from=92300...',
             messageById: 'GET /messages/:id',
             chats: 'GET /chats',
@@ -351,12 +366,24 @@ app.post('/send', async (req, res) => {
     }
 });
 
-/** Send image */
-app.post('/send/image', upload.single('file'), async (req, res) => {
+function parseBase64Field(value) {
+    if (!value || typeof value !== 'string') return null;
+    return value.replace(/^data:[^;]+;base64,/, '');
+}
+
+function truthy(value) {
+    if (value === true || value === 1) return true;
+    const s = String(value || '').trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes';
+}
+
+/** Send image — raw JSON (base64) preferred; multipart file optional */
+app.post('/send/image', optionalFileUpload, async (req, res) => {
     if (!requireReady(res)) return;
     try {
-        const number = req.body.number;
-        const caption = req.body.caption || '';
+        const body = req.body || {};
+        const number = body.number;
+        const caption = body.caption || '';
         const chatId = toChatId(number);
         if (!chatId) {
             cleanupUpload(req.file);
@@ -364,18 +391,22 @@ app.post('/send/image', upload.single('file'), async (req, res) => {
         }
 
         let media;
-        if (req.file) {
+        const base64 = parseBase64Field(body.base64);
+        if (base64) {
+            media = new MessageMedia(
+                body.mimetype || 'image/jpeg',
+                base64,
+                body.filename || 'image.jpg'
+            );
+        } else if (req.file) {
             media = MessageMedia.fromFilePath(req.file.path);
             if (req.file.mimetype) media.mimetype = req.file.mimetype;
             if (req.file.originalname) media.filename = req.file.originalname;
-        } else if (req.body.base64) {
-            media = new MessageMedia(
-                req.body.mimetype || 'image/jpeg',
-                req.body.base64.replace(/^data:[^;]+;base64,/, ''),
-                req.body.filename || 'image.jpg'
-            );
         } else {
-            return res.status(400).json({ success: false, error: 'Provide file upload or base64' });
+            return res.status(400).json({
+                success: false,
+                error: 'Provide JSON body with base64 (and mimetype) or multipart file',
+            });
         }
 
         const sent = await client.sendMessage(chatId, media, { caption });
@@ -387,11 +418,12 @@ app.post('/send/image', upload.single('file'), async (req, res) => {
     }
 });
 
-/** Send voice note (PTT) */
-app.post('/send/voice', upload.single('file'), async (req, res) => {
+/** Send voice note (PTT) — raw JSON (base64) preferred; multipart file optional */
+app.post('/send/voice', optionalFileUpload, async (req, res) => {
     if (!requireReady(res)) return;
     try {
-        const number = req.body.number;
+        const body = req.body || {};
+        const number = body.number;
         const chatId = toChatId(number);
         if (!chatId) {
             cleanupUpload(req.file);
@@ -399,20 +431,21 @@ app.post('/send/voice', upload.single('file'), async (req, res) => {
         }
 
         let media;
-        if (req.file) {
+        const base64 = parseBase64Field(body.base64);
+        if (base64) {
+            media = new MessageMedia(
+                body.mimetype || 'audio/ogg; codecs=opus',
+                base64,
+                body.filename || 'voice.ogg'
+            );
+        } else if (req.file) {
             media = MessageMedia.fromFilePath(req.file.path);
             media.mimetype = req.file.mimetype || 'audio/ogg; codecs=opus';
             media.filename = req.file.originalname || 'voice.ogg';
-        } else if (req.body.base64) {
-            media = new MessageMedia(
-                req.body.mimetype || 'audio/ogg; codecs=opus',
-                req.body.base64.replace(/^data:[^;]+;base64,/, ''),
-                req.body.filename || 'voice.ogg'
-            );
         } else {
             return res.status(400).json({
                 success: false,
-                error: 'Provide audio file upload or base64 (preferably .ogg opus)',
+                error: 'Provide JSON body with base64 (preferably .ogg opus) or multipart file',
             });
         }
 
@@ -425,13 +458,14 @@ app.post('/send/voice', upload.single('file'), async (req, res) => {
     }
 });
 
-/** Send any media (image/video/audio/document) */
-app.post('/send/media', upload.single('file'), async (req, res) => {
+/** Send any media — raw JSON (base64) preferred; multipart file optional */
+app.post('/send/media', optionalFileUpload, async (req, res) => {
     if (!requireReady(res)) return;
     try {
-        const number = req.body.number;
-        const caption = req.body.caption || '';
-        const asVoice = String(req.body.asVoice || '') === 'true';
+        const body = req.body || {};
+        const number = body.number;
+        const caption = body.caption || '';
+        const asVoice = truthy(body.asVoice);
         const chatId = toChatId(number);
         if (!chatId) {
             cleanupUpload(req.file);
@@ -439,18 +473,22 @@ app.post('/send/media', upload.single('file'), async (req, res) => {
         }
 
         let media;
-        if (req.file) {
+        const base64 = parseBase64Field(body.base64);
+        if (base64) {
+            media = new MessageMedia(
+                body.mimetype || 'application/octet-stream',
+                base64,
+                body.filename || 'file.bin'
+            );
+        } else if (req.file) {
             media = MessageMedia.fromFilePath(req.file.path);
             if (req.file.mimetype) media.mimetype = req.file.mimetype;
             if (req.file.originalname) media.filename = req.file.originalname;
-        } else if (req.body.base64) {
-            media = new MessageMedia(
-                req.body.mimetype || 'application/octet-stream',
-                req.body.base64.replace(/^data:[^;]+;base64,/, ''),
-                req.body.filename || 'file.bin'
-            );
         } else {
-            return res.status(400).json({ success: false, error: 'Provide file upload or base64' });
+            return res.status(400).json({
+                success: false,
+                error: 'Provide JSON body with base64 (and mimetype) or multipart file',
+            });
         }
 
         const options = { caption };

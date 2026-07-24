@@ -14,10 +14,10 @@ Send **text**, **images**, **voice notes**, and **any media**. Receive incoming 
 
 - Connect WhatsApp Web via QR code (API + browser image + terminal)
 - Session persistence with `LocalAuth` (no need to scan QR every restart)
-- Send text messages
-- Send images (file upload or base64)
-- Send voice notes (PTT)
-- Send any media (image / video / audio / document)
+- Send text messages via **raw JSON**
+- Send images via **raw JSON** (base64) — multipart file optional
+- Send voice notes (PTT) via **raw JSON** (base64)
+- Send any media (image / video / audio / document) via **raw JSON**
 - Receive messages into an in-memory inbox
 - Download / view received media
 - List chats
@@ -151,13 +151,48 @@ You can also pass a full chat id (including group ids), e.g. `1234567890@g.us`.
 
 Base URL: `http://localhost:3000`
 
+### Request format (raw JSON)
+
+All **POST** endpoints accept **raw JSON** bodies. Always send:
+
+```http
+Content-Type: application/json
+Authorization: Bearer YOUR_API_TOKEN
+```
+
+Example (Postman / Insomnia / curl): choose **Body → raw → JSON**, not form-data.
+
+Media endpoints expect the file as a `base64` string in the JSON body (a `data:...;base64,` prefix is OK and is stripped automatically). Multipart file upload still works as an optional fallback.
+
 All examples below use:
 
 ```bash
--H "Authorization: Bearer YOUR_API_TOKEN"
+-H "Authorization: Bearer YOUR_API_TOKEN" \
+-H "Content-Type: application/json"
 ```
 
 Replace `YOUR_API_TOKEN` with the value from your `.env` file.
+
+### Routes list
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| `GET` | `/` | API overview and endpoint list |
+| `GET` | `/status` | Check WhatsApp connection status |
+| `GET` | `/qr` | Get QR code as JSON (base64 image) when not connected |
+| `GET` | `/qr/image` | Get QR code as PNG image |
+| `POST` | `/send/text` | Send a text message (raw JSON) |
+| `POST` | `/send` | Alias of `/send/text` |
+| `POST` | `/send/image` | Send an image (JSON base64 or multipart file) |
+| `POST` | `/send/voice` | Send a voice note / PTT (JSON base64 or multipart file) |
+| `POST` | `/send/media` | Send any media — image, video, audio, document |
+| `GET` | `/messages` | List received messages (inbox) |
+| `GET` | `/messages/:id` | Get one message (includes media base64 if any) |
+| `GET` | `/chats` | List recent chats |
+| `GET` | `/media/:filename` | Download / view a saved incoming media file |
+| `POST` | `/logout` | Logout and disconnect the WhatsApp session |
+
+---
 
 ### `GET /`
 
@@ -301,16 +336,7 @@ curl -X POST http://localhost:3000/send/text \
 
 Send an image with optional caption.
 
-#### Option A — multipart file upload
-
-```bash
-curl -X POST http://localhost:3000/send/image \
-  -F "number=923001234567" \
-  -F "caption=My photo" \
-  -F "file=@./photo.jpg"
-```
-
-#### Option B — JSON base64
+**Body (raw JSON)**
 
 ```json
 {
@@ -326,8 +352,19 @@ curl -X POST http://localhost:3000/send/image \
 
 ```bash
 curl -X POST http://localhost:3000/send/image \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"number\":\"923001234567\",\"caption\":\"Hi\",\"mimetype\":\"image/jpeg\",\"base64\":\"YOUR_BASE64\"}"
+```
+
+Optional fallback — multipart file upload:
+
+```bash
+curl -X POST http://localhost:3000/send/image \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -F "number=923001234567" \
+  -F "caption=My photo" \
+  -F "file=@./photo.jpg"
 ```
 
 ---
@@ -336,15 +373,7 @@ curl -X POST http://localhost:3000/send/image \
 
 Send a **voice note** (PTT). Prefer `.ogg` (opus) for best WhatsApp compatibility.
 
-#### Multipart
-
-```bash
-curl -X POST http://localhost:3000/send/voice \
-  -F "number=923001234567" \
-  -F "file=@./voice.ogg"
-```
-
-#### JSON base64
+**Body (raw JSON)**
 
 ```json
 {
@@ -353,6 +382,13 @@ curl -X POST http://localhost:3000/send/voice \
   "filename": "voice.ogg",
   "base64": "T2dnUwAC..."
 }
+```
+
+```bash
+curl -X POST http://localhost:3000/send/voice \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"number\":\"923001234567\",\"mimetype\":\"audio/ogg; codecs=opus\",\"base64\":\"YOUR_BASE64\"}"
 ```
 
 **Response**
@@ -366,31 +402,22 @@ curl -X POST http://localhost:3000/send/voice \
 }
 ```
 
+Optional fallback — multipart:
+
+```bash
+curl -X POST http://localhost:3000/send/voice \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -F "number=923001234567" \
+  -F "file=@./voice.ogg"
+```
+
 ---
 
 ### `POST /send/media`
 
 Send any media type (image, video, audio, document).
 
-#### Multipart
-
-```bash
-curl -X POST http://localhost:3000/send/media \
-  -F "number=923001234567" \
-  -F "caption=Document" \
-  -F "file=@./file.pdf"
-```
-
-Send audio as voice note:
-
-```bash
-curl -X POST http://localhost:3000/send/media \
-  -F "number=923001234567" \
-  -F "asVoice=true" \
-  -F "file=@./voice.ogg"
-```
-
-#### JSON base64
+**Body (raw JSON)**
 
 ```json
 {
@@ -401,6 +428,34 @@ curl -X POST http://localhost:3000/send/media \
   "base64": "JVBERi0xLjQK...",
   "asVoice": false
 }
+```
+
+```bash
+curl -X POST http://localhost:3000/send/media \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"number\":\"923001234567\",\"caption\":\"File\",\"mimetype\":\"application/pdf\",\"base64\":\"YOUR_BASE64\"}"
+```
+
+Send audio as a voice note with JSON:
+
+```json
+{
+  "number": "923001234567",
+  "mimetype": "audio/ogg; codecs=opus",
+  "base64": "T2dnUwAC...",
+  "asVoice": true
+}
+```
+
+Optional fallback — multipart:
+
+```bash
+curl -X POST http://localhost:3000/send/media \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -F "number=923001234567" \
+  -F "caption=Document" \
+  -F "file=@./file.pdf"
 ```
 
 ---
@@ -539,6 +594,26 @@ When WhatsApp is not ready, send/receive endpoints return **HTTP 503**:
 ```
 
 Validation errors return **HTTP 400**. Server errors return **HTTP 500** with `error` message.
+
+---
+
+## Example: send text (raw JSON from JavaScript)
+
+```js
+const TOKEN = 'YOUR_API_TOKEN';
+
+await fetch('http://localhost:3000/send/text', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${TOKEN}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    number: '923001234567',
+    message: 'Hello from raw JSON',
+  }),
+});
+```
 
 ---
 
