@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -5,12 +7,61 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+
+const API_TOKEN = process.env.API_TOKEN;
+if (!API_TOKEN || API_TOKEN === 'change_me_to_a_long_random_secret') {
+    console.error('ERROR: Set a strong API_TOKEN in your .env file before starting.');
+    console.error('Copy .env.example to .env and generate a token:');
+    console.error('  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    process.exit(1);
+}
 
 const app = express();
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+/** Extract token from Authorization Bearer, x-api-token, or ?token= */
+function extractToken(req) {
+    const auth = req.headers.authorization;
+    if (auth && auth.startsWith('Bearer ')) {
+        return auth.slice(7).trim();
+    }
+    if (req.headers['x-api-token']) {
+        return String(req.headers['x-api-token']).trim();
+    }
+    if (req.query && req.query.token) {
+        return String(req.query.token).trim();
+    }
+    if (req.body && req.body.token) {
+        return String(req.body.token).trim();
+    }
+    return null;
+}
+
+function tokensEqual(a, b) {
+    const bufA = Buffer.from(String(a));
+    const bufB = Buffer.from(String(b));
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/** Reject any request without a valid API token */
+function requireApiToken(req, res, next) {
+    const token = extractToken(req);
+    if (!token || !tokensEqual(token, API_TOKEN)) {
+        return res.status(401).json({
+            success: false,
+            error: 'Unauthorized',
+            message: 'Valid API token required. Use Authorization: Bearer <token> or x-api-token header.',
+        });
+    }
+    next();
+}
+
+app.use(requireApiToken);
 
 // Ensure folders exist
 ['uploads', 'media'].forEach((dir) => {
@@ -188,7 +239,8 @@ function cleanupUpload(file) {
 
 app.get('/', (req, res) => {
     res.json({
-        name: 'WhatsApp API',
+        name: 'WhatsApp REST API',
+        auth: 'Required on every request: Authorization: Bearer <API_TOKEN> or x-api-token header',
         endpoints: {
             status: 'GET /status',
             qr: 'GET /qr',

@@ -23,6 +23,7 @@ Send **text**, **images**, **voice notes**, and **any media**. Receive incoming 
 - List chats
 - Connection status endpoint
 - Logout / disconnect session
+- **API token auth** — every request requires a secret from `.env`
 
 ---
 
@@ -40,7 +41,23 @@ Send **text**, **images**, **voice notes**, and **any media**. Receive incoming 
 git clone https://github.com/azhar-py/whatsapp-rest-api.git
 cd whatsapp-rest-api
 npm install
+cp .env.example .env
 ```
+
+Edit `.env` and set a strong `API_TOKEN` (do not use the example value):
+
+```env
+PORT=3000
+API_TOKEN=your_long_random_secret_here
+```
+
+Generate a random token:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+> `.env` is gitignored. Never commit your real token. Only `.env.example` is in the repo.
 
 ---
 
@@ -66,13 +83,52 @@ After a successful scan, the API is ready. Session data is saved in `.wwebjs_aut
 
 ---
 
+## Authentication (required)
+
+Every API call must include your `API_TOKEN` from `.env`. Without it the server returns **401 Unauthorized**.
+
+**Option 1 — Bearer header (recommended)**
+
+```bash
+curl http://localhost:3000/status \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
+```
+
+**Option 2 — Custom header**
+
+```bash
+curl http://localhost:3000/status \
+  -H "x-api-token: YOUR_API_TOKEN"
+```
+
+**Option 3 — Query string** (less secure; avoid in production)
+
+```bash
+curl "http://localhost:3000/status?token=YOUR_API_TOKEN"
+```
+
+Missing/invalid token response:
+
+```json
+{
+  "success": false,
+  "error": "Unauthorized",
+  "message": "Valid API token required. Use Authorization: Bearer <token> or x-api-token header."
+}
+```
+
+This protects the API if your PC/Wi‑Fi is exposed on the local network — others cannot send messages or read inbox without the secret.
+
+---
+
 ## Quick start flow
 
-1. Start the server → `npm start`
-2. Check status → `GET /status`
-3. If not connected → `GET /qr` or open `GET /qr/image` in browser
-4. Scan QR with your phone
-5. When `connected: true` → send / receive messages
+1. Copy `.env.example` → `.env` and set `API_TOKEN`
+2. Start the server → `npm start`
+3. Check status → `GET /status` **with token**
+4. If not connected → `GET /qr` or open `GET /qr/image` (with token)
+5. Scan QR with your phone
+6. When `connected: true` → send / receive messages
 
 ---
 
@@ -95,12 +151,21 @@ You can also pass a full chat id (including group ids), e.g. `1234567890@g.us`.
 
 Base URL: `http://localhost:3000`
 
+All examples below use:
+
+```bash
+-H "Authorization: Bearer YOUR_API_TOKEN"
+```
+
+Replace `YOUR_API_TOKEN` with the value from your `.env` file.
+
 ### `GET /`
 
 Returns a short list of available endpoints.
 
 ```bash
-curl http://localhost:3000/
+curl http://localhost:3000/ \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
 ---
@@ -129,7 +194,8 @@ Check whether WhatsApp is connected.
 | `DISCONNECTED` | Session lost |
 
 ```bash
-curl http://localhost:3000/status
+curl http://localhost:3000/status \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
 ---
@@ -175,7 +241,8 @@ If QR is not ready yet (HTTP `202`):
 ```
 
 ```bash
-curl http://localhost:3000/qr
+curl http://localhost:3000/qr \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
 ---
@@ -189,7 +256,8 @@ http://localhost:3000/qr/image
 ```
 
 ```bash
-curl -o qr.png http://localhost:3000/qr/image
+curl -o qr.png http://localhost:3000/qr/image \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
 ---
@@ -220,6 +288,7 @@ Send a text message.
 
 ```bash
 curl -X POST http://localhost:3000/send/text \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"number\":\"923001234567\",\"message\":\"Hello\"}"
 ```
@@ -478,13 +547,16 @@ Validation errors return **HTTP 400**. Server errors return **HTTP 500** with `e
 ```html
 <img id="qr" alt="Scan QR" />
 <script>
+  const TOKEN = 'YOUR_API_TOKEN'; // from .env — never expose in public websites
+  const headers = { Authorization: `Bearer ${TOKEN}` };
+
   async function loadQr() {
-    const status = await fetch('http://localhost:3000/status').then(r => r.json());
+    const status = await fetch('http://localhost:3000/status', { headers }).then(r => r.json());
     if (status.connected) {
       document.getElementById('qr').alt = 'Already connected';
       return;
     }
-    const data = await fetch('http://localhost:3000/qr').then(r => r.json());
+    const data = await fetch('http://localhost:3000/qr', { headers }).then(r => r.json());
     if (data.qrImage) {
       document.getElementById('qr').src = data.qrImage;
     } else {
@@ -503,6 +575,8 @@ Validation errors return **HTTP 400**. Server errors return **HTTP 500** with `e
 whatsapp-rest-api/
 ├── server.js          # Main API server
 ├── package.json
+├── .env               # Your secrets (gitignored)
+├── .env.example       # Example env (safe to commit)
 ├── .gitignore
 ├── uploads/           # Temporary uploads (auto-cleaned after send)
 ├── media/             # Saved incoming media files
@@ -513,9 +587,21 @@ whatsapp-rest-api/
 
 ## Environment
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3000` | HTTP server port |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `API_TOKEN` | **Yes** | — | Secret token required on every request |
+| `PORT` | No | `3000` | HTTP server port |
+
+Copy the example file:
+
+```bash
+cp .env.example .env
+```
+
+```env
+PORT=3000
+API_TOKEN=change_me_to_a_long_random_secret
+```
 
 ```bash
 # Windows PowerShell
