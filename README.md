@@ -1,6 +1,10 @@
-# WhatsApp Web API
+# WhatsApp REST API
+
+[![GitHub](https://img.shields.io/badge/GitHub-azhar--py%2Fwhatsapp--rest--api-blue?logo=github)](https://github.com/azhar-py/whatsapp-rest-api)
 
 A simple but powerful REST API for WhatsApp Web built with [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) and Express.
+
+**Repository:** [https://github.com/azhar-py/whatsapp-rest-api](https://github.com/azhar-py/whatsapp-rest-api)
 
 Send **text**, **images**, **voice notes**, and **any media**. Receive incoming messages (including images). Check connection status and get a **QR code via API** when the session is not linked.
 
@@ -33,8 +37,8 @@ Send **text**, **images**, **voice notes**, and **any media**. Receive incoming 
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/whatsapp-api.git
-cd whatsapp-api
+git clone https://github.com/azhar-py/whatsapp-rest-api.git
+cd whatsapp-rest-api
 npm install
 ```
 
@@ -496,7 +500,7 @@ Validation errors return **HTTP 400**. Server errors return **HTTP 500** with `e
 ## Project structure
 
 ```
-whatsapp-api/
+whatsapp-rest-api/
 ├── server.js          # Main API server
 ├── package.json
 ├── .gitignore
