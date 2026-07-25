@@ -12,7 +12,7 @@ Send **text**, **images**, **voice notes**, and **any media**. Receive incoming 
 
 ## Features
 
-- Connect WhatsApp Web via QR code (API + browser image + terminal)
+- Connect WhatsApp Web via QR code (API only — no terminal QR)
 - Session persistence with `LocalAuth` (no need to scan QR every restart)
 - Send text messages via **raw JSON**
 - Send images via **raw JSON** (base64) — multipart file optional
@@ -73,9 +73,15 @@ Server runs at:
 http://localhost:3000
 ```
 
-On first run you will see a QR code in the terminal. You can also fetch it from the API (see below).
+On first run (or when not linked), the terminal only prints:
 
-Scan the QR with WhatsApp:
+```
+QR ready — GET /qr/image
+```
+
+Open `GET /qr/image` to get the PNG. WhatsApp refreshes the code periodically — the API always keeps **only the latest active QR**.
+
+Scan with WhatsApp:
 
 **WhatsApp → Linked Devices → Link a Device**
 
@@ -85,7 +91,9 @@ After a successful scan, the API is ready. Session data is saved in `.wwebjs_aut
 
 ## Authentication (required)
 
-Every API call must include your `API_TOKEN` from `.env`. Without it the server returns **401 Unauthorized**.
+Every API call **except** `GET /` must include your `API_TOKEN` from `.env`. Without it the server returns **401 Unauthorized**.
+
+`GET /` is public — it only lists endpoints (no send/receive access).
 
 **Option 1 — Bearer header (recommended)**
 
@@ -126,7 +134,7 @@ This protects the API if your PC/Wi‑Fi is exposed on the local network — oth
 1. Copy `.env.example` → `.env` and set `API_TOKEN`
 2. Start the server → `npm start`
 3. Check status → `GET /status` **with token**
-4. If not connected → `GET /qr` or open `GET /qr/image` (with token)
+4. If not connected → open `GET /qr/image` (with token)
 5. Scan QR with your phone
 6. When `connected: true` → send / receive messages
 
@@ -177,12 +185,10 @@ Replace `YOUR_API_TOKEN` with the value from your `.env` file.
 
 | Method | Route | Purpose |
 |--------|-------|---------|
-| `GET` | `/` | API overview and endpoint list |
+| `GET` | `/` | API overview (public — no token) |
 | `GET` | `/status` | Check WhatsApp connection status |
-| `GET` | `/qr` | Get QR code as JSON (base64 image) when not connected |
-| `GET` | `/qr/image` | Get QR code as PNG image |
+| `GET` | `/qr/image` | Get the active QR as a PNG image (only QR route) |
 | `POST` | `/send/text` | Send a text message (raw JSON) |
-| `POST` | `/send` | Alias of `/send/text` |
 | `POST` | `/send/image` | Send an image (JSON base64 or multipart file) |
 | `POST` | `/send/voice` | Send a voice note / PTT (JSON base64 or multipart file) |
 | `POST` | `/send/media` | Send any media — image, video, audio, document |
@@ -190,17 +196,16 @@ Replace `YOUR_API_TOKEN` with the value from your `.env` file.
 | `GET` | `/messages/:id` | Get one message (includes media base64 if any) |
 | `GET` | `/chats` | List recent chats |
 | `GET` | `/media/:filename` | Download / view a saved incoming media file |
-| `POST` | `/logout` | Logout and disconnect the WhatsApp session |
+| `POST` | `/logout` | Logout, wipe session/QR/cache/files, then wait for a new QR |
 
 ---
 
 ### `GET /`
 
-Returns a short list of available endpoints.
+Returns a short list of available endpoints. **No auth required.**
 
 ```bash
-curl http://localhost:3000/ \
-  -H "Authorization: Bearer YOUR_API_TOKEN"
+curl http://localhost:3000/
 ```
 
 ---
@@ -235,59 +240,14 @@ curl http://localhost:3000/status \
 
 ---
 
-### `GET /qr`
-
-Get QR code as JSON when **not connected**.
-
-**Response example**
-
-```json
-{
-  "success": true,
-  "connected": false,
-  "state": "QR",
-  "qr": "2@Abc...",
-  "qrImage": "data:image/png;base64,iVBORw0KGgo...",
-  "qrImageUrl": "/qr/image"
-}
-```
-
-Use `qrImage` directly in an `<img src="...">` in your frontend.
-
-If already connected:
-
-```json
-{
-  "success": true,
-  "connected": true,
-  "message": "Already connected. No QR needed."
-}
-```
-
-If QR is not ready yet (HTTP `202`):
-
-```json
-{
-  "success": false,
-  "connected": false,
-  "state": "INITIALIZING",
-  "message": "QR not ready yet. Wait a few seconds and retry."
-}
-```
-
-```bash
-curl http://localhost:3000/qr \
-  -H "Authorization: Bearer YOUR_API_TOKEN"
-```
-
----
-
 ### `GET /qr/image`
 
-Returns the QR as a **PNG image**. Open this URL in a browser and scan it.
+Returns the **active** QR as a **PNG image**. Only one QR is kept at a time (newer codes replace the old one).
+
+Open in a browser (include your token), or save with curl:
 
 ```
-http://localhost:3000/qr/image
+http://localhost:3000/qr/image?token=YOUR_API_TOKEN
 ```
 
 ```bash
@@ -295,8 +255,13 @@ curl -o qr.png http://localhost:3000/qr/image \
   -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
----
+| Status | Meaning |
+|--------|---------|
+| `200` + PNG | QR ready to scan |
+| `202` | QR not ready yet — retry in a few seconds |
+| `400` | Already connected — no QR needed |
 
+---
 ### `POST /send/text`
 
 Send a text message.
@@ -314,10 +279,15 @@ Send a text message.
 
 ```json
 {
-  "success": true,
-  "id": "true_923001234567@c.us_XXXX",
-  "to": "923001234567@c.us",
-  "message": "Hello from WhatsApp API"
+  "success": true
+}
+```
+
+On failure:
+
+```json
+{
+  "success": false
 }
 ```
 
@@ -328,8 +298,6 @@ curl -X POST http://localhost:3000/send/text \
   -d "{\"number\":\"923001234567\",\"message\":\"Hello\"}"
 ```
 
-> Alias: `POST /send` (same body) is also supported.
-
 ---
 
 ### `POST /send/image`
@@ -337,7 +305,6 @@ curl -X POST http://localhost:3000/send/text \
 Send an image with optional caption.
 
 **Body (raw JSON)**
-
 ```json
 {
   "number": "923001234567",
@@ -356,6 +323,8 @@ curl -X POST http://localhost:3000/send/image \
   -H "Content-Type: application/json" \
   -d "{\"number\":\"923001234567\",\"caption\":\"Hi\",\"mimetype\":\"image/jpeg\",\"base64\":\"YOUR_BASE64\"}"
 ```
+
+**Response:** `{ "success": true }` or `{ "success": false }`
 
 Optional fallback — multipart file upload:
 
@@ -391,16 +360,7 @@ curl -X POST http://localhost:3000/send/voice \
   -d "{\"number\":\"923001234567\",\"mimetype\":\"audio/ogg; codecs=opus\",\"base64\":\"YOUR_BASE64\"}"
 ```
 
-**Response**
-
-```json
-{
-  "success": true,
-  "id": "true_923001234567@c.us_XXXX",
-  "to": "923001234567@c.us",
-  "asVoice": true
-}
-```
+**Response:** `{ "success": true }` or `{ "success": false }`
 
 Optional fallback — multipart:
 
@@ -447,6 +407,8 @@ Send audio as a voice note with JSON:
   "asVoice": true
 }
 ```
+
+**Response:** `{ "success": true }` or `{ "success": false }`
 
 Optional fallback — multipart:
 
@@ -572,11 +534,24 @@ http://localhost:3000/media/FILENAME.jpeg
 
 ### `POST /logout`
 
-Logout WhatsApp session. After logout, call `/qr` again to link a new device.
+Logout WhatsApp and **delete local session data**, then start fresh so a new QR can be fetched.
+
+Clears:
+
+- In-memory QR + inbox
+- `.wwebjs_auth/` (session)
+- `.wwebjs_cache/`
+- `uploads/` and `media/`
+- Optional `qr.png` / `qr.jpg` files in the project root
+
+After logout, wait a few seconds and open `GET /qr/image` to scan again.
 
 ```bash
-curl -X POST http://localhost:3000/logout
+curl -X POST http://localhost:3000/logout \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
+
+**Response:** `{ "success": true }` or `{ "success": false }`
 
 ---
 
@@ -589,7 +564,7 @@ When WhatsApp is not ready, send/receive endpoints return **HTTP 503**:
   "success": false,
   "error": "WhatsApp not connected",
   "state": "QR",
-  "hint": "Call GET /qr to get QR code, then scan with WhatsApp"
+  "hint": "GET /qr/image"
 }
 ```
 
@@ -631,9 +606,10 @@ await fetch('http://localhost:3000/send/text', {
       document.getElementById('qr').alt = 'Already connected';
       return;
     }
-    const data = await fetch('http://localhost:3000/qr', { headers }).then(r => r.json());
-    if (data.qrImage) {
-      document.getElementById('qr').src = data.qrImage;
+    const res = await fetch('http://localhost:3000/qr/image', { headers });
+    if (res.ok) {
+      const blob = await res.blob();
+      document.getElementById('qr').src = URL.createObjectURL(blob);
     } else {
       setTimeout(loadQr, 2000); // retry until QR is ready
     }
@@ -703,11 +679,13 @@ PORT=4000 npm start
 
 | Problem | Fix |
 |---------|-----|
-| QR never appears | Wait 5–10s and call `GET /qr` again; check terminal logs |
-| `WhatsApp not connected` | Scan QR via `/qr` or `/qr/image` |
+| QR never appears | Wait 5–10s and call `GET /qr/image` again; check terminal for `QR ready` |
+| `WhatsApp not connected` | Scan QR via `/qr/image` |
 | Message not delivered | Use full country code number, e.g. `92...` |
+| `Number is not registered on WhatsApp` | Number has no WhatsApp account — check digits / country code |
+| `success: true` but `id` is `null` | Message was sent; WhatsApp did not return an id (common) — check the phone |
 | Voice not showing as note | Use `.ogg` opus and `/send/voice` |
-| Session broken | `POST /logout`, delete `.wwebjs_auth`, restart, scan new QR |
+| Session broken | `POST /logout` (wipes auth/cache/files), then `GET /qr/image` and scan |
 | Puppeteer / Chrome errors | Install Google Chrome; on Linux add needed dependencies |
 
 ---
